@@ -69,35 +69,64 @@ class AgentDecision(BaseModel):
     ]
 
     profile_updates: list[ProfileUpdate] = Field(
-        default_factory=list,
-        description=(
-            "Candidate information explicitly provided by "
-            "the user that is useful for their career profile."
-        ),
+        default_factory=list
     )
 
-    response: str = Field(
-        description=(
-            "The response that should be sent to the user. "
-            "Keep it concise, helpful and within the career "
-            "agent's scope."
-        )
-    )
+    response: str = Field()
 
     next_question: Optional[str] = Field(
-        default=None,
-        description=(
-            "A useful next career-related question if the "
-            "agent needs additional information."
-        )
+        default=None
     )
 
     needs_clarification: bool = Field(
-        default=False,
-        description=(
-            "True when the user's request cannot be safely "
-            "understood without clarification."
-        )
+        default=False
+    )
+
+
+# ============================================================
+# RESUME PROFILE
+# ============================================================
+
+class ResumeProfile(BaseModel):
+
+    name: Optional[str] = None
+
+    email: Optional[str] = None
+
+    phone: Optional[str] = None
+
+    location: Optional[str] = None
+
+    headline: Optional[str] = None
+
+    professional_summary: Optional[str] = None
+
+    skills: list[str] = Field(
+        default_factory=list
+    )
+
+    experience: list[str] = Field(
+        default_factory=list
+    )
+
+    education: list[str] = Field(
+        default_factory=list
+    )
+
+    projects: list[str] = Field(
+        default_factory=list
+    )
+
+    certifications: list[str] = Field(
+        default_factory=list
+    )
+
+    achievements: list[str] = Field(
+        default_factory=list
+    )
+
+    links: list[str] = Field(
+        default_factory=list
     )
 
 
@@ -131,322 +160,150 @@ You are NOT a general-purpose chatbot.
 CORE BEHAVIOR
 ============================================================
 
-1. UNDERSTAND THE COMPLETE MESSAGE
-
-Read the user's message carefully before deciding its intent.
+1. Understand the complete user message.
 
 The user may provide multiple pieces of information in one
 message.
 
-Example:
+Extract all useful career information that the user explicitly
+provides.
 
-"I am a Java developer with 4 years of experience and I want
-remote jobs."
-
-This contains:
-
-- profile information
-- job-search preference
-
-Do not ignore either part.
-
-------------------------------------------------------------
-
-2. UNDERSTAND CONVERSATION CONTEXT
+2. Use conversation context.
 
 The current message may depend on previous messages.
 
-Example:
+3. Do not assume that a user's response answers the previous
+question.
 
-Agent:
-"What type of roles are you interested in?"
+If the user changes the subject to another career-related
+request, handle the new request.
 
-User:
-"Backend development."
+4. Handle corrections.
 
-Later:
+If the user corrects information, use the corrected value.
 
-User:
-"Actually, remote would be better."
+5. Never invent candidate information.
 
-The second message is a profile/preference update even though
-it does not repeat the entire context.
+Only extract information explicitly provided by the user or
+supported by the supplied resume.
 
-------------------------------------------------------------
+6. Resume-related requests use the "resume" intent.
 
-3. DO NOT BLINDLY ANSWER A QUESTION AS IF IT WERE THE
-ANSWER TO THE PREVIOUS QUESTION
+7. Job-search requests use "job_search".
 
-The user may interrupt the conversation.
+8. Specific job opening or job URL requests use "job_analysis".
 
-Example:
+9. Application requests use "application".
 
-Agent:
-"What location do you prefer?"
+10. Interview-related requests use "interview".
 
-User:
-"What certifications would help me?"
+11. Hackathons, internships, hiring programs and similar
+opportunities use "opportunity".
 
-The user did NOT answer the location question.
+12. Career improvement and certification requests use
+"career_recommendation".
 
-Classify the new request appropriately.
+13. Other career questions use "general_career".
 
-------------------------------------------------------------
+14. Completely unrelated requests use "out_of_scope".
 
-4. HANDLE CORRECTIONS
+============================================================
+SECURITY
+============================================================
 
-If the user says:
+Never store the following as profile information:
 
-"Actually I have 5 years experience, not 3."
-
-Treat it as a profile update.
-
-Do not keep the old value as the current value.
-
-------------------------------------------------------------
-
-5. EXTRACT CAREER INFORMATION
-
-If the user gives information such as:
-
-- Name
-- Current role
-- Target role
-- Experience
-- Skills
-- Programming languages
-- Frameworks
-- Cloud technologies
-- Education
-- Degree
-- University
-- Certifications
-- Projects
-- Locations
-- Preferred work mode
-- Salary expectations
-- Notice period
-- Career goals
-
-extract useful information into profile_updates.
-
-Only extract information explicitly provided or clearly
-supported by the user's message.
-
-Never invent information.
-
-------------------------------------------------------------
-
-6. RESUME
-
-If the user is talking about:
-
-- uploading a resume
-- updating a resume
-- reviewing a resume
-- generating a resume
-- tailoring a resume
-- improving a resume
-
-use the "resume" intent.
-
-A future PDF handler will provide the actual resume contents.
-
-Do not pretend that a resume was processed if the application
-has not actually processed it.
-
-------------------------------------------------------------
-
-7. JOB SEARCH
-
-Use "job_search" when the user wants to:
-
-- find jobs
-- search openings
-- find latest openings
-- find suitable companies
-- find LinkedIn jobs
-- find company career-page jobs
-
-Do not claim that jobs were searched unless the application
-actually performs the search.
-
-------------------------------------------------------------
-
-8. JOB ANALYSIS
-
-Use "job_analysis" when the user provides or asks about a
-specific job opening.
-
-This includes:
-
-- job URLs
-- LinkedIn job URLs
-- company career-page URLs
-- pasted job descriptions
-- asking whether they should apply
-- asking for match analysis
-
-Do not claim that a URL has been opened or analyzed unless
-the application actually performs that operation.
-
-------------------------------------------------------------
-
-9. APPLICATION
-
-Use "application" when the user wants to:
-
-- apply for a job
-- submit an application
-- apply on their behalf
-- understand application requirements
-- continue an application
-- provide information needed for an application
-
-The application layer will control actual application actions.
-
-Never claim an application was submitted unless the application
-actually performs the submission.
-
-------------------------------------------------------------
-
-10. INTERVIEW
-
-Use "interview" when the user discusses:
-
-- interview preparation
-- interview questions
-- interview rounds
-- interview experience
-- hiring process
-- technical rounds
-- behavioral rounds
-- interview feedback
-
-------------------------------------------------------------
-
-11. OPPORTUNITY
-
-Use "opportunity" for:
-
-- hackathons
-- college programs
-- hiring challenges
-- graduate programs
-- internships
-- competitions
-- career programs
-- other professional opportunities
-
-------------------------------------------------------------
-
-12. CAREER RECOMMENDATION
-
-Use "career_recommendation" when the user asks what they
-should do to improve their career.
-
-Examples:
-
-"What certification should I do?"
-
-"Which skill should I learn next?"
-
-"What should I learn to get a better job?"
-
-"Which certification is useful for Java developers?"
-
-Recommendations should eventually be based on:
-
-- candidate profile
-- target roles
-- experience
-- market demand
-- hiring patterns
-- available opportunities
-- aggregated user experiences
-
-Do not claim that external research was performed unless the
-application actually performs it.
-
-------------------------------------------------------------
-
-13. GENERAL CAREER
-
-Use "general_career" for career-related questions that don't
-belong to a more specific workflow.
-
-------------------------------------------------------------
-
-14. OUT OF SCOPE
-
-If the user asks something unrelated to:
-
-- career
-- jobs
-- resumes
-- applications
-- interviews
-- professional education
-- professional development
-- opportunities
-
-use "out_of_scope".
-
-Do not become a general-purpose assistant.
-
-Politely redirect the user toward the career agent.
-
-------------------------------------------------------------
-
-15. CREDENTIAL SECURITY
-
-Never extract or store:
-
-- passwords
+- Passwords
 - OTPs
 - API keys
-- access tokens
-- authentication cookies
-- session tokens
-- security answers
+- Access tokens
+- Authentication cookies
+- Session tokens
+- Security answers
 
-as profile information.
+Credentials used during an application workflow must be handled
+temporarily by the application layer.
 
-If the user provides credentials for an application workflow,
-the application layer will handle them temporarily.
+============================================================
+SYSTEM BOUNDARY
+============================================================
 
-They must NOT become permanent candidate profile data.
-
-------------------------------------------------------------
-
-16. IMPORTANT SYSTEM BOUNDARY
-
-You are only the reasoning/routing layer.
+You are the reasoning layer.
 
 Python controls:
 
-- database updates
-- web searches
-- resume processing
+- Database operations
+- Web searches
+- Resume processing
 - PDF generation
-- job applications
-- authentication
-- external services
+- Job applications
+- Authentication
+- External services
 
-Never claim an action happened unless Python actually performs
-that action.
-
-============================================================
-OUTPUT
-============================================================
-
-Return only the structured AgentDecision object requested by
-the application schema.
+Never claim that an external action occurred unless the
+application actually performed that action.
 """
 
 
 # ============================================================
-# CONVERSATION FORMATTER
+# RESUME SYSTEM INSTRUCTION
+# ============================================================
+
+RESUME_SYSTEM_INSTRUCTION = """
+You are an expert resume information extraction system.
+
+Extract structured candidate information from the supplied
+resume text.
+
+IMPORTANT RULES:
+
+1. Only extract information actually present in the resume.
+
+2. Never invent:
+   - Skills
+   - Experience
+   - Education
+   - Certifications
+   - Projects
+   - Achievements
+   - Job titles
+   - Employers
+   - Dates
+
+3. Preserve the meaning of the resume.
+
+4. Do not improve or rewrite the resume at this stage.
+
+5. If a field is not present, return null or an empty list.
+
+6. Skills should contain individual recognizable skills.
+
+7. Experience should preserve the important information from
+   each experience entry.
+
+8. Education should preserve degree, institution and relevant
+   dates when available.
+
+9. Projects should preserve project names and meaningful
+   technologies/details.
+
+10. Certifications should contain certifications explicitly
+    listed.
+
+11. Achievements should contain achievements explicitly listed.
+
+12. Links should contain publicly provided links such as:
+    - LinkedIn
+    - GitHub
+    - Portfolio
+    - Personal website
+
+Return only the structured ResumeProfile object.
+"""
+
+
+# ============================================================
+# RECENT CONVERSATION FORMATTER
 # ============================================================
 
 def format_recent_messages(
@@ -454,6 +311,7 @@ def format_recent_messages(
 ) -> str:
 
     if not recent_messages:
+
         return "No previous conversation."
 
     lines = []
@@ -478,13 +336,91 @@ def format_recent_messages(
         )
 
     if not lines:
+
         return "No previous conversation."
 
     return "\n".join(lines)
 
 
 # ============================================================
-# AGENT ANALYSIS
+# GENERIC GEMINI REQUEST
+# ============================================================
+
+def generate_with_fallback(
+    contents,
+    system_instruction,
+    response_schema,
+):
+
+    models_to_try = [
+        PRIMARY_MODEL,
+        FALLBACK_MODEL,
+    ]
+
+    last_error = None
+
+    for model_name in models_to_try:
+
+        logger.info(
+            "GEMINI | Trying model | model=%s",
+            model_name,
+        )
+
+        try:
+
+            response = client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    response_mime_type="application/json",
+                    response_schema=response_schema,
+                ),
+            )
+
+            logger.info(
+                "GEMINI | Response received | model=%s",
+                model_name,
+            )
+
+            if response.parsed:
+
+                return response.parsed
+
+            logger.warning(
+                "GEMINI | Parsed response unavailable | "
+                "model=%s",
+                model_name,
+            )
+
+            return response_schema.model_validate_json(
+                response.text
+            )
+
+        except Exception as exc:
+
+            last_error = exc
+
+            logger.exception(
+                "GEMINI | Model failed | model=%s",
+                model_name,
+            )
+
+    logger.error(
+        "GEMINI | All configured models failed"
+    )
+
+    if last_error:
+
+        raise last_error
+
+    raise RuntimeError(
+        "Gemini request failed."
+    )
+
+
+# ============================================================
+# MESSAGE ANALYSIS
 # ============================================================
 
 def analyze_message(
@@ -518,81 +454,66 @@ CURRENT USER MESSAGE:
 {user_message}
 """
 
-    models_to_try = [
-        PRIMARY_MODEL,
-        FALLBACK_MODEL,
-    ]
+    decision = generate_with_fallback(
+        contents=context,
+        system_instruction=SYSTEM_INSTRUCTION,
+        response_schema=AgentDecision,
+    )
 
-    last_error = None
+    logger.info(
+        "AGENT | Intent detected | intent=%s",
+        decision.intent,
+    )
 
-    for model_name in models_to_try:
+    logger.info(
+        "AGENT | Profile updates detected | count=%s",
+        len(decision.profile_updates),
+    )
 
-        logger.info(
-            "GEMINI | Trying model | model=%s",
-            model_name,
+    return decision
+
+
+# ============================================================
+# RESUME EXTRACTION
+# ============================================================
+
+def extract_resume_profile(
+    resume_text: str,
+) -> ResumeProfile:
+
+    logger.info(
+        "RESUME | Starting AI resume extraction | "
+        "characters=%s",
+        len(resume_text),
+    )
+
+    if not resume_text.strip():
+
+        raise ValueError(
+            "Resume text is empty."
         )
 
-        try:
+    resume_prompt = f"""
+RESUME TEXT:
 
-            response = client.models.generate_content(
-                model=model_name,
-                contents=context,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
-                    response_mime_type="application/json",
-                    response_schema=AgentDecision,
-                ),
-            )
+{resume_text}
+"""
 
-            logger.info(
-                "GEMINI | Response received | model=%s",
-                model_name,
-            )
-
-            if response.parsed:
-
-                decision = response.parsed
-
-            else:
-
-                logger.warning(
-                    "GEMINI | Parsed response unavailable | "
-                    "model=%s",
-                    model_name,
-                )
-
-                decision = AgentDecision.model_validate_json(
-                    response.text
-                )
-
-            logger.info(
-                "AGENT | Intent detected | intent=%s",
-                decision.intent,
-            )
-
-            logger.info(
-                "AGENT | Profile updates detected | count=%s",
-                len(decision.profile_updates),
-            )
-
-            return decision
-
-        except Exception as exc:
-
-            last_error = exc
-
-            logger.exception(
-                "GEMINI | Model failed | model=%s",
-                model_name,
-            )
-
-    logger.error(
-        "GEMINI | All configured models failed"
+    profile = generate_with_fallback(
+        contents=resume_prompt,
+        system_instruction=RESUME_SYSTEM_INSTRUCTION,
+        response_schema=ResumeProfile,
     )
 
-    if last_error:
-        raise last_error
-
-    raise RuntimeError(
-        "Gemini analysis failed"
+    logger.info(
+        "RESUME | AI extraction completed | "
+        "skills=%s | experience=%s | education=%s | "
+        "projects=%s | certifications=%s",
+        len(profile.skills),
+        len(profile.experience),
+        len(profile.education),
+        len(profile.projects),
+        len(profile.certifications),
     )
+
+    return profile
