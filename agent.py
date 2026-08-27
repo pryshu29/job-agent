@@ -20,7 +20,8 @@ if not GEMINI_API_KEY:
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-MODEL_NAME = "gemini-3.6-flash"
+PRIMARY_MODEL = "gemini-3.6-flash"
+FALLBACK_MODEL = "gemini-3.5-flash-lite"
 
 
 # ============================================================
@@ -143,13 +144,27 @@ def analyze_message(
     user_message: str,
     current_question: Optional[str] = None,
     current_profile: Optional[dict] = None,
+    recent_messages: Optional[list] = None,
 ) -> AgentDecision:
 
-    logger.info(
-        "GEMINI | Starting message analysis"
-    )
+    logger.info("GEMINI | Starting message analysis")
 
     profile = current_profile or {}
+    history = recent_messages or []
+
+    conversation_context = []
+
+    for item in history:
+        role = item.get("role", "unknown")
+        message = item.get("message", "")
+
+        conversation_context.append(
+            f"{role}: {message}"
+        )
+
+    history_text = "\n".join(
+        conversation_context
+    )
 
     context = f"""
 CURRENT AGENT QUESTION:
@@ -158,52 +173,82 @@ CURRENT AGENT QUESTION:
 CURRENT KNOWN PROFILE:
 {profile}
 
-USER MESSAGE:
+RECENT CONVERSATION:
+{history_text or "No previous conversation."}
+
+CURRENT USER MESSAGE:
 {user_message}
 """
 
-    try:
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=context,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                response_mime_type="application/json",
-                response_schema=AgentDecision,
-            ),
-        )
+    models_to_try = [
+        PRIMARY_MODEL,
+        FALLBACK_MODEL,
+    ]
+
+    last_error = None
+
+    for model_name in models_to_try:
 
         logger.info(
-            "GEMINI | Response received successfully"
+            "GEMINI | Trying model | model=%s",
+            model_name,
         )
 
-        if response.parsed:
-            decision = response.parsed
+        try:
 
-        else:
-            logger.warning(
-                "GEMINI | Parsed response unavailable; "
-                "validating response text"
+            response = client.models.generate_content(
+                model=model_name,
+                contents=context,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    response_mime_type="application/json",
+                    response_schema=AgentDecision,
+                ),
             )
 
-            decision = AgentDecision.model_validate_json(
-                response.text
+            logger.info(
+                "GEMINI | Response received | model=%s",
+                model_name,
             )
 
-        logger.info(
-            "AGENT | Intent detected | intent=%s",
-            decision.intent,
-        )
+            if response.parsed:
 
-        logger.info(
-            "AGENT | Profile updates detected | count=%s",
-            len(decision.profile_updates),
-        )
+                decision = response.parsed
 
-        return decision
+            else:
 
-    except Exception:
-        logger.exception(
-            "GEMINI | Message analysis failed"
-        )
-        raise
+                logger.warning(
+                    "GEMINI | Parsed response unavailable | model=%s",
+                    model_name,
+                )
+
+                decision = AgentDecision.model_validate_json(
+                    response.text
+                )
+
+            logger.info(
+                "AGENT | Intent detected | intent=%s",
+                decision.intent,
+            )
+
+            logger.info(
+                "AGENT | Profile updates detected | count=%s",
+                len(decision.profile_updates),
+            )
+
+            return decision
+
+        except Exception as exc:
+
+            last_error = exc
+
+            logger.exception(
+                "GEMINI | Model failed | model=%s",
+                model_name,
+            )
+
+    logger.error(
+        "GEMINI | All models failed"
+    )
+
+    raise last_error
