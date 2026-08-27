@@ -19,8 +19,11 @@ from config import (
 
 from database import (
     check_database_connection,
+    create_indexes,
     create_user,
+    get_recent_messages,
     get_user,
+    save_message,
     update_agent_state,
     update_profile,
 )
@@ -43,7 +46,8 @@ logging.basicConfig(
 
 logger = logging.getLogger("AI_JOB_AGENT")
 
-# Never expose Telegram API URLs containing the bot token.
+# Prevent Telegram/HTTP libraries from printing URLs
+# containing the bot token.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -59,6 +63,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
+
     logger.info(
         "HEALTH | Health check received"
     )
@@ -67,6 +72,7 @@ def home():
 
 
 def run_web():
+
     port = int(
         os.environ.get(
             "PORT",
@@ -94,18 +100,22 @@ def run_web():
 def check_authorization(update: Update) -> bool:
 
     if not update.effective_user:
+
         logger.warning(
             "AUTH | Missing effective user"
         )
+
         return False
 
     user_id = update.effective_user.id
 
     if user_id != AUTHORIZED_USER_ID:
+
         logger.warning(
             "AUTH | Unauthorized user rejected | user_id=%s",
             user_id,
         )
+
         return False
 
     return True
@@ -135,6 +145,7 @@ async def start(
     )
 
     try:
+
         create_user(user_id)
 
         await update.message.reply_text(
@@ -153,6 +164,7 @@ async def start(
         )
 
     except Exception:
+
         logger.exception(
             "AGENT | Failed to initialize user | user_id=%s",
             user_id,
@@ -174,9 +186,11 @@ async def handle_message(
 ):
 
     if not update.effective_user:
+
         logger.warning(
             "BOT | Message without user"
         )
+
         return
 
     user_id = update.effective_user.id
@@ -190,25 +204,29 @@ async def handle_message(
         return
 
     if not update.message or not update.message.text:
+
         logger.warning(
             "BOT | Empty text message | user_id=%s",
             user_id,
         )
+
         return
 
     user_message = update.message.text
 
     try:
 
-        # ----------------------------------------------------
-        # Load/create user
-        # ----------------------------------------------------
+        # ====================================================
+        # LOAD USER
+        # ====================================================
 
         user = get_user(user_id)
 
         if not user:
+
             logger.info(
-                "AGENT | User missing; creating profile | user_id=%s",
+                "AGENT | User missing; creating profile | "
+                "user_id=%s",
                 user_id,
             )
 
@@ -232,12 +250,37 @@ async def handle_message(
             "current_question"
         )
 
-        # ----------------------------------------------------
-        # Gemini analysis
-        # ----------------------------------------------------
+        current_task = agent_state.get(
+            "current_task"
+        )
+
+        active_job_id = agent_state.get(
+            "active_job_id"
+        )
+
+        # ====================================================
+        # LOAD CONVERSATION MEMORY
+        # ====================================================
+
+        recent_messages = get_recent_messages(
+            user_id=user_id,
+            limit=20,
+        )
 
         logger.info(
-            "AGENT | Sending message for analysis | user_id=%s",
+            "AGENT | Context loaded | "
+            "user_id=%s | history_count=%s",
+            user_id,
+            len(recent_messages),
+        )
+
+        # ====================================================
+        # ANALYZE MESSAGE
+        # ====================================================
+
+        logger.info(
+            "AGENT | Sending message for analysis | "
+            "user_id=%s",
             user_id,
         )
 
@@ -245,11 +288,22 @@ async def handle_message(
             user_message=user_message,
             current_question=current_question,
             current_profile=profile,
+            recent_messages=recent_messages,
         )
 
-        # ----------------------------------------------------
-        # Profile updates
-        # ----------------------------------------------------
+        # ====================================================
+        # SAVE USER MESSAGE
+        # ====================================================
+
+        save_message(
+            user_id=user_id,
+            role="user",
+            message=user_message,
+        )
+
+        # ====================================================
+        # UPDATE PROFILE
+        # ====================================================
 
         if decision.profile_updates:
 
@@ -265,34 +319,52 @@ async def handle_message(
                 decision.profile_updates,
             )
 
-        # ----------------------------------------------------
-        # Agent state
-        # ----------------------------------------------------
+        # ====================================================
+        # UPDATE AGENT STATE
+        # ====================================================
 
         update_agent_state(
             user_id=user_id,
             workflow="career_agent",
             current_question=decision.next_question,
+            current_task=current_task,
+            active_job_id=active_job_id,
         )
 
-        # ----------------------------------------------------
-        # Response
-        # ----------------------------------------------------
+        # ====================================================
+        # PREPARE RESPONSE
+        # ====================================================
 
         response_text = decision.response
 
         if decision.next_question:
+
             response_text = (
                 f"{response_text}\n\n"
                 f"{decision.next_question}"
             )
 
+        # ====================================================
+        # SEND RESPONSE
+        # ====================================================
+
         await update.message.reply_text(
             response_text
         )
 
+        # ====================================================
+        # SAVE ASSISTANT RESPONSE
+        # ====================================================
+
+        save_message(
+            user_id=user_id,
+            role="assistant",
+            message=response_text,
+        )
+
         logger.info(
-            "AGENT | Response sent | user_id=%s | intent=%s",
+            "AGENT | Response sent | "
+            "user_id=%s | intent=%s",
             user_id,
             decision.intent,
         )
@@ -300,12 +372,13 @@ async def handle_message(
     except Exception:
 
         logger.exception(
-            "AGENT | Failed to process message | user_id=%s",
+            "AGENT | Failed to process message | "
+            "user_id=%s",
             user_id,
         )
 
         await update.message.reply_text(
-            "❌ I had trouble understanding that. "
+            "❌ I had trouble processing that message. "
             "Please try again."
         )
 
@@ -335,20 +408,22 @@ def main():
         "SYSTEM | Starting AI Job Agent"
     )
 
-    # --------------------------------------------------------
-    # Configuration
-    # --------------------------------------------------------
+    # ========================================================
+    # CONFIGURATION
+    # ========================================================
 
     logger.info(
         "CONFIG | Validating environment"
     )
 
     if not TELEGRAM_BOT_TOKEN:
+
         raise RuntimeError(
             "TELEGRAM_BOT_TOKEN is missing"
         )
 
     if not AUTHORIZED_USER_ID:
+
         raise RuntimeError(
             "AUTHORIZED_USER_ID is missing"
         )
@@ -357,9 +432,9 @@ def main():
         "CONFIG | Environment validation successful"
     )
 
-    # --------------------------------------------------------
-    # MongoDB
-    # --------------------------------------------------------
+    # ========================================================
+    # MONGODB
+    # ========================================================
 
     logger.info(
         "MONGODB | Checking connection"
@@ -371,9 +446,15 @@ def main():
         "MONGODB | Connection successful"
     )
 
-    # --------------------------------------------------------
-    # Flask
-    # --------------------------------------------------------
+    create_indexes()
+
+    logger.info(
+        "MONGODB | Indexes ready"
+    )
+
+    # ========================================================
+    # FLASK
+    # ========================================================
 
     web_thread = Thread(
         target=run_web,
@@ -387,9 +468,9 @@ def main():
         "WEB | Health server started"
     )
 
-    # --------------------------------------------------------
-    # Telegram
-    # --------------------------------------------------------
+    # ========================================================
+    # TELEGRAM
+    # ========================================================
 
     logger.info(
         "TELEGRAM | Creating application"
@@ -401,9 +482,9 @@ def main():
         .build()
     )
 
-    # --------------------------------------------------------
-    # Handlers
-    # --------------------------------------------------------
+    # ========================================================
+    # HANDLERS
+    # ========================================================
 
     application.add_handler(
         CommandHandler(
@@ -427,9 +508,9 @@ def main():
         "TELEGRAM | Handlers registered"
     )
 
-    # --------------------------------------------------------
-    # Polling
-    # --------------------------------------------------------
+    # ========================================================
+    # POLLING
+    # ========================================================
 
     logger.info(
         "TELEGRAM | Starting polling"
@@ -447,6 +528,7 @@ def main():
 if __name__ == "__main__":
 
     try:
+
         main()
 
     except Exception:
