@@ -15,7 +15,6 @@ from telegram.ext import (
 
 from config import (
     TELEGRAM_BOT_TOKEN,
-    AUTHORIZED_USER_ID,
 )
 
 from database import (
@@ -48,14 +47,17 @@ LOG_FORMAT = (
     "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 )
 
+
 logging.basicConfig(
     format=LOG_FORMAT,
     level=logging.INFO,
 )
 
+
 logger = logging.getLogger(
     "AI_JOB_AGENT"
 )
+
 
 # Do not expose Telegram API URLs/tokens in logs.
 logging.getLogger(
@@ -111,34 +113,46 @@ def run_web():
 
 
 # ============================================================
-# AUTHORIZATION
+# USER SESSION
 # ============================================================
 
-def check_authorization(
-    update: Update,
-) -> bool:
+def ensure_user(
+    user_id,
+):
 
-    if not update.effective_user:
+    logger.info(
+        "USER | Checking user session | "
+        "user_id=%s",
+        user_id,
+    )
 
-        logger.warning(
-            "AUTH | Missing effective user"
-        )
+    user = get_user(
+        user_id
+    )
 
-        return False
+    if not user:
 
-    user_id = update.effective_user.id
-
-    if user_id != AUTHORIZED_USER_ID:
-
-        logger.warning(
-            "AUTH | Unauthorized user rejected | "
+        logger.info(
+            "USER | New user detected; creating profile | "
             "user_id=%s",
             user_id,
         )
 
-        return False
+        create_user(
+            user_id
+        )
 
-    return True
+        user = get_user(
+            user_id
+        )
+
+    logger.info(
+        "USER | User session ready | "
+        "user_id=%s",
+        user_id,
+    )
+
+    return user
 
 
 # ============================================================
@@ -154,7 +168,12 @@ async def start(
         "BOT | /start received"
     )
 
-    if not check_authorization(update):
+    if not update.effective_user:
+
+        logger.warning(
+            "BOT | /start without effective user"
+        )
+
         return
 
     user_id = update.effective_user.id
@@ -167,7 +186,7 @@ async def start(
 
     try:
 
-        create_user(
+        ensure_user(
             user_id
         )
 
@@ -327,9 +346,6 @@ async def handle_message(
         user_id,
     )
 
-    if not check_authorization(update):
-        return
-
     if not update.message or not update.message.text:
 
         logger.warning(
@@ -344,25 +360,9 @@ async def handle_message(
 
     try:
 
-        user = get_user(
+        user = ensure_user(
             user_id
         )
-
-        if not user:
-
-            logger.info(
-                "AGENT | User missing; creating profile | "
-                "user_id=%s",
-                user_id,
-            )
-
-            create_user(
-                user_id
-            )
-
-            user = get_user(
-                user_id
-            )
 
         profile = (
             user.get(
@@ -525,9 +525,6 @@ async def handle_resume_document(
         user_id,
     )
 
-    if not check_authorization(update):
-        return
-
     if not update.message or not update.message.document:
 
         logger.warning(
@@ -572,6 +569,10 @@ async def handle_resume_document(
     temporary_path = None
 
     try:
+
+        ensure_user(
+            user_id
+        )
 
         await update.message.reply_text(
             "📄 I received your resume. "
@@ -810,12 +811,6 @@ def main():
 
         raise RuntimeError(
             "TELEGRAM_BOT_TOKEN is missing"
-        )
-
-    if not AUTHORIZED_USER_ID:
-
-        raise RuntimeError(
-            "AUTHORIZED_USER_ID is missing"
         )
 
     logger.info(
