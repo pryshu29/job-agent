@@ -1,0 +1,210 @@
+import logging
+from typing import Literal, Optional
+
+from google import genai
+from google.genai import types
+from pydantic import BaseModel, Field
+
+from config import GEMINI_API_KEY
+
+
+logger = logging.getLogger("AI_JOB_AGENT")
+
+
+# ============================================================
+# GEMINI CLIENT
+# ============================================================
+
+if not GEMINI_API_KEY:
+    raise RuntimeError("GEMINI_API_KEY is missing")
+
+client = genai.Client(api_key=GEMINI_API_KEY)
+
+MODEL_NAME = "gemini-2.5-flash"
+
+
+# ============================================================
+# AGENT RESPONSE SCHEMA
+# ============================================================
+
+class ProfileUpdate(BaseModel):
+    field: str = Field(
+        description="The candidate profile field to update."
+    )
+
+    value: str = Field(
+        description="The value to store for that field."
+    )
+
+
+class AgentDecision(BaseModel):
+    intent: Literal[
+        "answer_current_question",
+        "add_profile_information",
+        "correct_information",
+        "ask_related_question",
+        "career_question",
+        "unrelated_request",
+        "general_conversation",
+    ]
+
+    profile_updates: list[ProfileUpdate] = Field(
+        default_factory=list,
+        description=(
+            "Useful candidate information explicitly provided "
+            "by the user. Only include information relevant to "
+            "career, job search, resume, education, skills, "
+            "experience, preferences, or applications."
+        ),
+    )
+
+    needs_clarification: bool = False
+
+    response: str = Field(
+        description=(
+            "The response the career agent should send to the user. "
+            "Keep the response focused on the user's career/job "
+            "agent context."
+        )
+    )
+
+    next_question: Optional[str] = Field(
+        default=None,
+        description=(
+            "The next useful career-related question to ask, "
+            "if more information is needed."
+        )
+    )
+
+
+# ============================================================
+# SYSTEM INSTRUCTION
+# ============================================================
+
+SYSTEM_INSTRUCTION = """
+You are the AI reasoning layer of an AI Career Agent.
+
+Your job is to understand the user's message in the context of
+their career, job search, resume, education, skills, experience,
+applications, interviews, opportunities, and career development.
+
+IMPORTANT RULES:
+
+1. Understand context before deciding what the user's message means.
+
+2. NEVER assume that the user's message is automatically an answer
+   to the previous question.
+
+3. If the user provides useful career information while answering
+   another question, extract BOTH pieces of information.
+
+4. If the user corrects previously provided information, identify
+   the correction.
+
+5. If the user asks a related career question, answer it and keep
+   the conversation focused on the career-agent task.
+
+6. If the user asks something unrelated to career, jobs, resumes,
+   applications, interviews, education, skills, opportunities,
+   or career development, do not become a general-purpose chatbot.
+   Politely keep the conversation within the career-agent scope.
+
+7. Never invent candidate information.
+
+8. Only extract information explicitly stated or clearly implied
+   by the user's message.
+
+9. Do not store passwords, OTPs, API keys, authentication tokens,
+   cookies, or other credentials as profile information.
+
+10. Do not treat sensitive authentication information as normal
+    candidate profile data.
+
+11. The agent can understand natural language and multiple pieces
+    of information in one message.
+
+12. Keep responses concise and conversational.
+
+13. The Python application, not you, controls database updates
+    and future actions.
+
+You are currently handling the candidate profile/onboarding stage.
+Do not pretend that job searching, resume generation, web searching,
+or application submission has happened unless the application
+actually performs that operation.
+"""
+
+
+# ============================================================
+# AGENT ANALYSIS
+# ============================================================
+
+def analyze_message(
+    user_message: str,
+    current_question: Optional[str] = None,
+    current_profile: Optional[dict] = None,
+) -> AgentDecision:
+
+    logger.info(
+        "GEMINI | Starting message analysis"
+    )
+
+    profile = current_profile or {}
+
+    context = f"""
+CURRENT AGENT QUESTION:
+{current_question or "No question currently pending."}
+
+CURRENT KNOWN PROFILE:
+{profile}
+
+USER MESSAGE:
+{user_message}
+"""
+
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=context,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
+                response_mime_type="application/json",
+                response_schema=AgentDecision,
+                temperature=0.2,
+            ),
+        )
+
+        logger.info(
+            "GEMINI | Response received successfully"
+        )
+
+        if response.parsed:
+            decision = response.parsed
+
+        else:
+            logger.warning(
+                "GEMINI | Parsed response unavailable; "
+                "validating response text"
+            )
+
+            decision = AgentDecision.model_validate_json(
+                response.text
+            )
+
+        logger.info(
+            "AGENT | Intent detected | intent=%s",
+            decision.intent,
+        )
+
+        logger.info(
+            "AGENT | Profile updates detected | count=%s",
+            len(decision.profile_updates),
+        )
+
+        return decision
+
+    except Exception:
+        logger.exception(
+            "GEMINI | Message analysis failed"
+        )
+        raise
