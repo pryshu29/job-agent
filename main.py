@@ -46,8 +46,8 @@ logging.basicConfig(
 
 logger = logging.getLogger("AI_JOB_AGENT")
 
-# Prevent Telegram/HTTP libraries from printing URLs
-# containing the bot token.
+# Prevent HTTP libraries from logging Telegram API URLs.
+# This also prevents bot tokens from appearing in normal logs.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -150,12 +150,17 @@ async def start(
 
         await update.message.reply_text(
             "👋 Welcome to your AI Career Agent!\n\n"
-            "I can help you with your career, jobs, "
-            "resume, applications, interviews, "
-            "skills and opportunities.\n\n"
-            "Tell me about yourself and what you're "
-            "looking for. You can explain it naturally "
-            "— you don't need to follow a fixed format."
+            "I can help you with:\n"
+            "• Career planning\n"
+            "• Resume\n"
+            "• Job search\n"
+            "• Job analysis\n"
+            "• Applications\n"
+            "• Interview preparation\n"
+            "• Certifications\n"
+            "• Hackathons and career opportunities\n\n"
+            "You can talk naturally. You don't need to "
+            "follow a fixed questionnaire."
         )
 
         logger.info(
@@ -174,6 +179,153 @@ async def start(
             "❌ I couldn't initialize your profile right now. "
             "Please try again."
         )
+
+
+# ============================================================
+# ROUTER RESPONSE
+# ============================================================
+
+def build_router_response(
+    decision,
+) -> str:
+
+    intent = decision.intent
+
+    # --------------------------------------------------------
+    # PROFILE
+    # --------------------------------------------------------
+
+    if intent == "profile_update":
+
+        response = decision.response
+
+        if decision.next_question:
+
+            response = (
+                f"{response}\n\n"
+                f"{decision.next_question}"
+            )
+
+        return response
+
+    # --------------------------------------------------------
+    # RESUME
+    # --------------------------------------------------------
+
+    if intent == "resume":
+
+        return (
+            "📄 I can work with your resume.\n\n"
+            "Resume processing is the next capability we're "
+            "connecting. You will be able to send your PDF "
+            "directly here, and I'll extract and understand "
+            "your career information."
+        )
+
+    # --------------------------------------------------------
+    # JOB SEARCH
+    # --------------------------------------------------------
+
+    if intent == "job_search":
+
+        return (
+            "🔎 I understand that you want to search for jobs.\n\n"
+            "The job-search engine isn't connected yet. "
+            "Once it is connected, I'll search relevant "
+            "company career pages and LinkedIn openings "
+            "based on your profile and preferences."
+        )
+
+    # --------------------------------------------------------
+    # JOB ANALYSIS
+    # --------------------------------------------------------
+
+    if intent == "job_analysis":
+
+        return (
+            "🔍 I understand that you want me to analyze "
+            "a specific job opening.\n\n"
+            "The job-analysis tool isn't connected yet. "
+            "Once connected, I'll be able to analyze the "
+            "job description, compare it with your profile "
+            "and help prepare a targeted resume."
+        )
+
+    # --------------------------------------------------------
+    # CAREER RECOMMENDATION
+    # --------------------------------------------------------
+
+    if intent == "career_recommendation":
+
+        return decision.response
+
+    # --------------------------------------------------------
+    # APPLICATION
+    # --------------------------------------------------------
+
+    if intent == "application":
+
+        return (
+            "🚀 I understand that you want help with a job "
+            "application.\n\n"
+            "The application automation layer isn't connected "
+            "yet. When we build it, I'll first determine "
+            "whether the application can be completed "
+            "automatically. If it cannot, I'll provide the "
+            "opening URL and the appropriate tailored resume "
+            "for you to apply directly."
+        )
+
+    # --------------------------------------------------------
+    # INTERVIEW
+    # --------------------------------------------------------
+
+    if intent == "interview":
+
+        return decision.response
+
+    # --------------------------------------------------------
+    # OPPORTUNITY
+    # --------------------------------------------------------
+
+    if intent == "opportunity":
+
+        return (
+            "🎯 I understand that you're looking for a "
+            "career opportunity such as a hackathon, hiring "
+            "program, internship, challenge or similar "
+            "program.\n\n"
+            "The opportunity-search engine isn't connected yet. "
+            "We'll add it later."
+        )
+
+    # --------------------------------------------------------
+    # GENERAL CAREER
+    # --------------------------------------------------------
+
+    if intent == "general_career":
+
+        return decision.response
+
+    # --------------------------------------------------------
+    # OUT OF SCOPE
+    # --------------------------------------------------------
+
+    if intent == "out_of_scope":
+
+        return (
+            "I'm focused specifically on helping with your "
+            "career, jobs, resume, applications, interviews "
+            "and professional opportunities.\n\n"
+            "Tell me what you'd like to achieve in your "
+            "career and I'll help you with it."
+        )
+
+    # --------------------------------------------------------
+    # FALLBACK
+    # --------------------------------------------------------
+
+    return decision.response
 
 
 # ============================================================
@@ -259,7 +411,7 @@ async def handle_message(
         )
 
         # ====================================================
-        # LOAD CONVERSATION MEMORY
+        # LOAD RECENT CONVERSATION
         # ====================================================
 
         recent_messages = get_recent_messages(
@@ -275,7 +427,7 @@ async def handle_message(
         )
 
         # ====================================================
-        # ANALYZE MESSAGE
+        # GEMINI
         # ====================================================
 
         logger.info(
@@ -320,6 +472,21 @@ async def handle_message(
             )
 
         # ====================================================
+        # ROUTE INTENT
+        # ====================================================
+
+        logger.info(
+            "ROUTER | Routing intent | "
+            "user_id=%s | intent=%s",
+            user_id,
+            decision.intent,
+        )
+
+        response_text = build_router_response(
+            decision
+        )
+
+        # ====================================================
         # UPDATE AGENT STATE
         # ====================================================
 
@@ -330,19 +497,6 @@ async def handle_message(
             current_task=current_task,
             active_job_id=active_job_id,
         )
-
-        # ====================================================
-        # PREPARE RESPONSE
-        # ====================================================
-
-        response_text = decision.response
-
-        if decision.next_question:
-
-            response_text = (
-                f"{response_text}\n\n"
-                f"{decision.next_question}"
-            )
 
         # ====================================================
         # SEND RESPONSE
@@ -377,10 +531,20 @@ async def handle_message(
             user_id,
         )
 
-        await update.message.reply_text(
-            "❌ I had trouble processing that message. "
-            "Please try again."
-        )
+        try:
+
+            await update.message.reply_text(
+                "❌ I had trouble processing that message. "
+                "Please try again."
+            )
+
+        except Exception:
+
+            logger.exception(
+                "BOT | Failed to send error response | "
+                "user_id=%s",
+                user_id,
+            )
 
 
 # ============================================================
