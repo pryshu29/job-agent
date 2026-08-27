@@ -8,13 +8,24 @@ from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
-    ConversationHandler,
     MessageHandler,
     filters,
 )
 
-from config import TELEGRAM_BOT_TOKEN, AUTHORIZED_USER_ID
-from database import check_database_connection, save_preferences
+from config import (
+    TELEGRAM_BOT_TOKEN,
+    AUTHORIZED_USER_ID,
+)
+
+from database import (
+    check_database_connection,
+    create_user,
+    get_user,
+    update_agent_state,
+    update_profile,
+)
+
+from agent import analyze_message
 
 
 # ============================================================
@@ -32,19 +43,11 @@ logging.basicConfig(
 
 logger = logging.getLogger("AI_JOB_AGENT")
 
-# Prevent HTTP client logs from exposing URLs containing tokens.
+# Never expose Telegram API URLs containing the bot token.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-# Reduce Flask/Werkzeug noise.
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
-
-
-# ============================================================
-# CONVERSATION STATES
-# ============================================================
-
-ROLE, LOCATION, SALARY = range(3)
 
 
 # ============================================================
@@ -56,12 +59,20 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    logger.info("HEALTH | Health check received")
+    logger.info(
+        "HEALTH | Health check received"
+    )
+
     return "AI Job Agent is alive!"
 
 
 def run_web():
-    port = int(os.environ.get("PORT", 10000))
+    port = int(
+        os.environ.get(
+            "PORT",
+            10000,
+        )
+    )
 
     logger.info(
         "WEB | Starting health server | port=%s",
@@ -81,9 +92,10 @@ def run_web():
 # ============================================================
 
 def check_authorization(update: Update) -> bool:
+
     if not update.effective_user:
         logger.warning(
-            "AUTH | Message received without effective user"
+            "AUTH | Missing effective user"
         )
         return False
 
@@ -96,212 +108,218 @@ def check_authorization(update: Update) -> bool:
         )
         return False
 
-    logger.info(
-        "AUTH | User authorized | user_id=%s",
-        user_id,
-    )
-
     return True
 
 
 # ============================================================
-# START COMMAND
+# START
 # ============================================================
 
 async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    logger.info("BOT | /start received")
+
+    logger.info(
+        "BOT | /start received"
+    )
 
     if not check_authorization(update):
-        return ConversationHandler.END
+        return
 
     user_id = update.effective_user.id
 
     logger.info(
-        "ONBOARDING | Starting onboarding | user_id=%s",
-        user_id,
-    )
-
-    await update.message.reply_text(
-        "👋 Welcome to AI Job Agent!\n\n"
-        "I'll help you find jobs, optimize resumes "
-        "and prepare applications.\n\n"
-        "First question:\n"
-        "💼 What role are you looking for?"
-    )
-
-    logger.info(
-        "ONBOARDING | Waiting for role | user_id=%s",
-        user_id,
-    )
-
-    return ROLE
-
-
-# ============================================================
-# ROLE
-# ============================================================
-
-async def role(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    user_id = update.effective_user.id
-
-    logger.info(
-        "ONBOARDING | Role received | user_id=%s",
-        user_id,
-    )
-
-    context.user_data["role"] = update.message.text
-
-    await update.message.reply_text(
-        "📍 Great!\nWhich locations do you prefer?"
-    )
-
-    logger.info(
-        "ONBOARDING | Waiting for location | user_id=%s",
-        user_id,
-    )
-
-    return LOCATION
-
-
-# ============================================================
-# LOCATION
-# ============================================================
-
-async def location(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    user_id = update.effective_user.id
-
-    logger.info(
-        "ONBOARDING | Location received | user_id=%s",
-        user_id,
-    )
-
-    context.user_data["location"] = update.message.text
-
-    await update.message.reply_text(
-        "💰 What's your minimum expected salary?"
-        "\nExample: 12 LPA"
-    )
-
-    logger.info(
-        "ONBOARDING | Waiting for salary | user_id=%s",
-        user_id,
-    )
-
-    return SALARY
-
-
-# ============================================================
-# SALARY
-# ============================================================
-
-async def salary(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    user_id = update.effective_user.id
-
-    logger.info(
-        "ONBOARDING | Salary received | user_id=%s",
-        user_id,
-    )
-
-    context.user_data["salary"] = update.message.text
-
-    preferences = {
-        "role": context.user_data["role"],
-        "location": context.user_data["location"],
-        "salary": context.user_data["salary"],
-    }
-
-    logger.info(
-        "PROFILE | Saving preferences | user_id=%s",
+        "AGENT | Starting user session | user_id=%s",
         user_id,
     )
 
     try:
-        save_preferences(
-            user_id,
-            preferences,
+        create_user(user_id)
+
+        await update.message.reply_text(
+            "👋 Welcome to your AI Career Agent!\n\n"
+            "I can help you with your career, jobs, "
+            "resume, applications, interviews, "
+            "skills and opportunities.\n\n"
+            "Tell me about yourself and what you're "
+            "looking for. You can explain it naturally "
+            "— you don't need to follow a fixed format."
         )
 
         logger.info(
-            "MONGODB | Preferences saved | user_id=%s",
+            "AGENT | Session initialized | user_id=%s",
             user_id,
         )
 
     except Exception:
         logger.exception(
-            "MONGODB | Failed to save preferences | user_id=%s",
+            "AGENT | Failed to initialize user | user_id=%s",
             user_id,
         )
 
         await update.message.reply_text(
-            "❌ I couldn't save your profile right now. "
+            "❌ I couldn't initialize your profile right now. "
             "Please try again."
         )
 
-        return ConversationHandler.END
-
-    await update.message.reply_text(
-        "✅ Your job profile has been created!\n\n"
-        f"Role: {preferences['role']}\n"
-        f"Location: {preferences['location']}\n"
-        f"Salary: {preferences['salary']}\n\n"
-        "Next we'll build your resume profile."
-    )
-
-    logger.info(
-        "ONBOARDING | Completed successfully | user_id=%s",
-        user_id,
-    )
-
-    return ConversationHandler.END
-
 
 # ============================================================
-# CANCEL
+# TEXT MESSAGE
 # ============================================================
 
-async def cancel(
+async def handle_message(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    user_id = (
-        update.effective_user.id
-        if update.effective_user
-        else "unknown"
-    )
+
+    if not update.effective_user:
+        logger.warning(
+            "BOT | Message without user"
+        )
+        return
+
+    user_id = update.effective_user.id
 
     logger.info(
-        "ONBOARDING | Cancelled | user_id=%s",
+        "BOT | Text message received | user_id=%s",
         user_id,
     )
 
-    await update.message.reply_text(
-        "Onboarding cancelled."
-    )
+    if not check_authorization(update):
+        return
 
-    return ConversationHandler.END
+    if not update.message or not update.message.text:
+        logger.warning(
+            "BOT | Empty text message | user_id=%s",
+            user_id,
+        )
+        return
+
+    user_message = update.message.text
+
+    try:
+
+        # ----------------------------------------------------
+        # Load/create user
+        # ----------------------------------------------------
+
+        user = get_user(user_id)
+
+        if not user:
+            logger.info(
+                "AGENT | User missing; creating profile | user_id=%s",
+                user_id,
+            )
+
+            create_user(user_id)
+
+            user = get_user(user_id)
+
+        profile = (
+            user.get("profile", {})
+            if user
+            else {}
+        )
+
+        agent_state = (
+            user.get("agent_state", {})
+            if user
+            else {}
+        )
+
+        current_question = agent_state.get(
+            "current_question"
+        )
+
+        # ----------------------------------------------------
+        # Gemini analysis
+        # ----------------------------------------------------
+
+        logger.info(
+            "AGENT | Sending message for analysis | user_id=%s",
+            user_id,
+        )
+
+        decision = analyze_message(
+            user_message=user_message,
+            current_question=current_question,
+            current_profile=profile,
+        )
+
+        # ----------------------------------------------------
+        # Profile updates
+        # ----------------------------------------------------
+
+        if decision.profile_updates:
+
+            logger.info(
+                "PROFILE | Applying AI-detected updates | "
+                "user_id=%s | count=%s",
+                user_id,
+                len(decision.profile_updates),
+            )
+
+            update_profile(
+                user_id,
+                decision.profile_updates,
+            )
+
+        # ----------------------------------------------------
+        # Agent state
+        # ----------------------------------------------------
+
+        update_agent_state(
+            user_id=user_id,
+            workflow="career_agent",
+            current_question=decision.next_question,
+        )
+
+        # ----------------------------------------------------
+        # Response
+        # ----------------------------------------------------
+
+        response_text = decision.response
+
+        if decision.next_question:
+            response_text = (
+                f"{response_text}\n\n"
+                f"{decision.next_question}"
+            )
+
+        await update.message.reply_text(
+            response_text
+        )
+
+        logger.info(
+            "AGENT | Response sent | user_id=%s | intent=%s",
+            user_id,
+            decision.intent,
+        )
+
+    except Exception:
+
+        logger.exception(
+            "AGENT | Failed to process message | user_id=%s",
+            user_id,
+        )
+
+        await update.message.reply_text(
+            "❌ I had trouble understanding that. "
+            "Please try again."
+        )
 
 
 # ============================================================
-# GLOBAL ERROR HANDLER
+# ERROR HANDLER
 # ============================================================
 
 async def error_handler(
     update: object,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    logger.exception(
+
+    logger.error(
         "BOT | Unhandled exception",
         exc_info=context.error,
     )
@@ -313,60 +331,49 @@ async def error_handler(
 
 def main():
 
-    logger.info("SYSTEM | Starting AI Job Agent")
+    logger.info(
+        "SYSTEM | Starting AI Job Agent"
+    )
 
     # --------------------------------------------------------
-    # Environment validation
+    # Configuration
     # --------------------------------------------------------
 
-    logger.info("CONFIG | Checking required environment variables")
+    logger.info(
+        "CONFIG | Validating environment"
+    )
 
     if not TELEGRAM_BOT_TOKEN:
-        logger.critical(
-            "CONFIG | TELEGRAM_BOT_TOKEN is missing"
-        )
         raise RuntimeError(
             "TELEGRAM_BOT_TOKEN is missing"
         )
 
     if not AUTHORIZED_USER_ID:
-        logger.critical(
-            "CONFIG | AUTHORIZED_USER_ID is missing"
-        )
         raise RuntimeError(
             "AUTHORIZED_USER_ID is missing"
         )
 
     logger.info(
-        "CONFIG | Required environment variables are present"
+        "CONFIG | Environment validation successful"
     )
 
     # --------------------------------------------------------
     # MongoDB
     # --------------------------------------------------------
 
-    logger.info("MONGODB | Testing database connection")
+    logger.info(
+        "MONGODB | Checking connection"
+    )
 
-    try:
-        check_database_connection()
+    check_database_connection()
 
-        logger.info(
-            "MONGODB | Connection successful"
-        )
-
-    except Exception:
-        logger.exception(
-            "MONGODB | Connection failed"
-        )
-        raise
+    logger.info(
+        "MONGODB | Connection successful"
+    )
 
     # --------------------------------------------------------
     # Flask
     # --------------------------------------------------------
-
-    logger.info(
-        "WEB | Starting background health server"
-    )
 
     web_thread = Thread(
         target=run_web,
@@ -377,7 +384,7 @@ def main():
     web_thread.start()
 
     logger.info(
-        "WEB | Health server thread started"
+        "WEB | Health server started"
     )
 
     # --------------------------------------------------------
@@ -385,7 +392,7 @@ def main():
     # --------------------------------------------------------
 
     logger.info(
-        "TELEGRAM | Building Telegram application"
+        "TELEGRAM | Creating application"
     )
 
     application = (
@@ -394,51 +401,22 @@ def main():
         .build()
     )
 
-    logger.info(
-        "TELEGRAM | Application created"
-    )
-
     # --------------------------------------------------------
-    # Conversation handler
+    # Handlers
     # --------------------------------------------------------
 
-    conversation = ConversationHandler(
-        entry_points=[
-            CommandHandler(
-                "start",
-                start,
-            )
-        ],
-        states={
-            ROLE: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    role,
-                )
-            ],
-            LOCATION: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    location,
-                )
-            ],
-            SALARY: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    salary,
-                )
-            ],
-        },
-        fallbacks=[
-            CommandHandler(
-                "cancel",
-                cancel,
-            )
-        ],
+    application.add_handler(
+        CommandHandler(
+            "start",
+            start,
+        )
     )
 
     application.add_handler(
-        conversation
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_message,
+        )
     )
 
     application.add_error_handler(
@@ -450,7 +428,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Start polling
+    # Polling
     # --------------------------------------------------------
 
     logger.info(
@@ -467,11 +445,14 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
+
     try:
         main()
 
     except Exception:
+
         logger.exception(
-            "SYSTEM | AI Job Agent stopped because of an error"
+            "SYSTEM | AI Job Agent stopped"
         )
+
         raise
