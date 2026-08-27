@@ -1,5 +1,6 @@
 import logging
 import os
+import tempfile
 from threading import Thread
 
 from flask import Flask
@@ -24,11 +25,19 @@ from database import (
     get_recent_messages,
     get_user,
     save_message,
+    save_resume_profile,
     update_agent_state,
     update_profile,
 )
 
-from agent import analyze_message
+from agent import (
+    analyze_message,
+    extract_resume_profile,
+)
+
+from resume_parser import (
+    extract_resume_text,
+)
 
 
 # ============================================================
@@ -44,14 +53,22 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-logger = logging.getLogger("AI_JOB_AGENT")
+logger = logging.getLogger(
+    "AI_JOB_AGENT"
+)
 
-# Prevent HTTP libraries from logging Telegram API URLs.
-# This also prevents bot tokens from appearing in normal logs.
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
+# Do not expose Telegram API URLs/tokens in logs.
+logging.getLogger(
+    "httpx"
+).setLevel(logging.WARNING)
 
-logging.getLogger("werkzeug").setLevel(logging.WARNING)
+logging.getLogger(
+    "httpcore"
+).setLevel(logging.WARNING)
+
+logging.getLogger(
+    "werkzeug"
+).setLevel(logging.WARNING)
 
 
 # ============================================================
@@ -97,7 +114,9 @@ def run_web():
 # AUTHORIZATION
 # ============================================================
 
-def check_authorization(update: Update) -> bool:
+def check_authorization(
+    update: Update,
+) -> bool:
 
     if not update.effective_user:
 
@@ -112,7 +131,8 @@ def check_authorization(update: Update) -> bool:
     if user_id != AUTHORIZED_USER_ID:
 
         logger.warning(
-            "AUTH | Unauthorized user rejected | user_id=%s",
+            "AUTH | Unauthorized user rejected | "
+            "user_id=%s",
             user_id,
         )
 
@@ -140,13 +160,16 @@ async def start(
     user_id = update.effective_user.id
 
     logger.info(
-        "AGENT | Starting user session | user_id=%s",
+        "AGENT | Starting user session | "
+        "user_id=%s",
         user_id,
     )
 
     try:
 
-        create_user(user_id)
+        create_user(
+            user_id
+        )
 
         await update.message.reply_text(
             "👋 Welcome to your AI Career Agent!\n\n"
@@ -160,18 +183,22 @@ async def start(
             "• Certifications\n"
             "• Hackathons and career opportunities\n\n"
             "You can talk naturally. You don't need to "
-            "follow a fixed questionnaire."
+            "follow a fixed questionnaire.\n\n"
+            "📄 You can also send your resume PDF "
+            "directly in this chat."
         )
 
         logger.info(
-            "AGENT | Session initialized | user_id=%s",
+            "AGENT | Session initialized | "
+            "user_id=%s",
             user_id,
         )
 
     except Exception:
 
         logger.exception(
-            "AGENT | Failed to initialize user | user_id=%s",
+            "AGENT | Failed to initialize user | "
+            "user_id=%s",
             user_id,
         )
 
@@ -191,10 +218,6 @@ def build_router_response(
 
     intent = decision.intent
 
-    # --------------------------------------------------------
-    # PROFILE
-    # --------------------------------------------------------
-
     if intent == "profile_update":
 
         response = decision.response
@@ -208,122 +231,73 @@ def build_router_response(
 
         return response
 
-    # --------------------------------------------------------
-    # RESUME
-    # --------------------------------------------------------
-
     if intent == "resume":
 
         return (
-            "📄 I can work with your resume.\n\n"
-            "Resume processing is the next capability we're "
-            "connecting. You will be able to send your PDF "
-            "directly here, and I'll extract and understand "
-            "your career information."
+            "📄 Please send your resume as a PDF "
+            "document here. I'll extract the information "
+            "and add it to your career profile."
         )
-
-    # --------------------------------------------------------
-    # JOB SEARCH
-    # --------------------------------------------------------
 
     if intent == "job_search":
 
         return (
-            "🔎 I understand that you want to search for jobs.\n\n"
+            "🔎 I understand that you want to search "
+            "for jobs.\n\n"
             "The job-search engine isn't connected yet. "
-            "Once it is connected, I'll search relevant "
-            "company career pages and LinkedIn openings "
-            "based on your profile and preferences."
+            "We'll connect company career pages and "
+            "LinkedIn job searching next."
         )
-
-    # --------------------------------------------------------
-    # JOB ANALYSIS
-    # --------------------------------------------------------
 
     if intent == "job_analysis":
 
         return (
-            "🔍 I understand that you want me to analyze "
+            "🔍 I understand that you want to analyze "
             "a specific job opening.\n\n"
-            "The job-analysis tool isn't connected yet. "
-            "Once connected, I'll be able to analyze the "
-            "job description, compare it with your profile "
-            "and help prepare a targeted resume."
+            "The job-analysis engine isn't connected yet. "
+            "We'll add URL and job-description analysis next."
         )
-
-    # --------------------------------------------------------
-    # CAREER RECOMMENDATION
-    # --------------------------------------------------------
 
     if intent == "career_recommendation":
 
         return decision.response
 
-    # --------------------------------------------------------
-    # APPLICATION
-    # --------------------------------------------------------
-
     if intent == "application":
 
         return (
-            "🚀 I understand that you want help with a job "
-            "application.\n\n"
-            "The application automation layer isn't connected "
-            "yet. When we build it, I'll first determine "
-            "whether the application can be completed "
-            "automatically. If it cannot, I'll provide the "
-            "opening URL and the appropriate tailored resume "
-            "for you to apply directly."
+            "🚀 I understand that you want help applying "
+            "for a job.\n\n"
+            "The application automation layer isn't "
+            "connected yet."
         )
-
-    # --------------------------------------------------------
-    # INTERVIEW
-    # --------------------------------------------------------
 
     if intent == "interview":
 
         return decision.response
 
-    # --------------------------------------------------------
-    # OPPORTUNITY
-    # --------------------------------------------------------
-
     if intent == "opportunity":
 
         return (
-            "🎯 I understand that you're looking for a "
-            "career opportunity such as a hackathon, hiring "
-            "program, internship, challenge or similar "
-            "program.\n\n"
-            "The opportunity-search engine isn't connected yet. "
-            "We'll add it later."
+            "🎯 I understand that you're looking for "
+            "career opportunities such as hackathons, "
+            "internships, hiring programs or challenges.\n\n"
+            "The opportunity-search engine isn't connected "
+            "yet."
         )
-
-    # --------------------------------------------------------
-    # GENERAL CAREER
-    # --------------------------------------------------------
 
     if intent == "general_career":
 
         return decision.response
 
-    # --------------------------------------------------------
-    # OUT OF SCOPE
-    # --------------------------------------------------------
-
     if intent == "out_of_scope":
 
         return (
-            "I'm focused specifically on helping with your "
-            "career, jobs, resume, applications, interviews "
-            "and professional opportunities.\n\n"
+            "I'm focused on helping with your career, "
+            "jobs, resume, applications, interviews and "
+            "professional opportunities.\n\n"
             "Tell me what you'd like to achieve in your "
-            "career and I'll help you with it."
+            "career."
         )
-
-    # --------------------------------------------------------
-    # FALLBACK
-    # --------------------------------------------------------
 
     return decision.response
 
@@ -348,7 +322,8 @@ async def handle_message(
     user_id = update.effective_user.id
 
     logger.info(
-        "BOT | Text message received | user_id=%s",
+        "BOT | Text message received | "
+        "user_id=%s",
         user_id,
     )
 
@@ -358,7 +333,8 @@ async def handle_message(
     if not update.message or not update.message.text:
 
         logger.warning(
-            "BOT | Empty text message | user_id=%s",
+            "BOT | Empty text message | "
+            "user_id=%s",
             user_id,
         )
 
@@ -368,11 +344,9 @@ async def handle_message(
 
     try:
 
-        # ====================================================
-        # LOAD USER
-        # ====================================================
-
-        user = get_user(user_id)
+        user = get_user(
+            user_id
+        )
 
         if not user:
 
@@ -382,18 +356,28 @@ async def handle_message(
                 user_id,
             )
 
-            create_user(user_id)
+            create_user(
+                user_id
+            )
 
-            user = get_user(user_id)
+            user = get_user(
+                user_id
+            )
 
         profile = (
-            user.get("profile", {})
+            user.get(
+                "profile",
+                {}
+            )
             if user
             else {}
         )
 
         agent_state = (
-            user.get("agent_state", {})
+            user.get(
+                "agent_state",
+                {}
+            )
             if user
             else {}
         )
@@ -410,10 +394,6 @@ async def handle_message(
             "active_job_id"
         )
 
-        # ====================================================
-        # LOAD RECENT CONVERSATION
-        # ====================================================
-
         recent_messages = get_recent_messages(
             user_id=user_id,
             limit=20,
@@ -425,10 +405,6 @@ async def handle_message(
             user_id,
             len(recent_messages),
         )
-
-        # ====================================================
-        # GEMINI
-        # ====================================================
 
         logger.info(
             "AGENT | Sending message for analysis | "
@@ -443,19 +419,11 @@ async def handle_message(
             recent_messages=recent_messages,
         )
 
-        # ====================================================
-        # SAVE USER MESSAGE
-        # ====================================================
-
         save_message(
             user_id=user_id,
             role="user",
             message=user_message,
         )
-
-        # ====================================================
-        # UPDATE PROFILE
-        # ====================================================
 
         if decision.profile_updates:
 
@@ -463,17 +431,15 @@ async def handle_message(
                 "PROFILE | Applying AI-detected updates | "
                 "user_id=%s | count=%s",
                 user_id,
-                len(decision.profile_updates),
+                len(
+                    decision.profile_updates
+                ),
             )
 
             update_profile(
                 user_id,
                 decision.profile_updates,
             )
-
-        # ====================================================
-        # ROUTE INTENT
-        # ====================================================
 
         logger.info(
             "ROUTER | Routing intent | "
@@ -486,10 +452,6 @@ async def handle_message(
             decision
         )
 
-        # ====================================================
-        # UPDATE AGENT STATE
-        # ====================================================
-
         update_agent_state(
             user_id=user_id,
             workflow="career_agent",
@@ -498,17 +460,9 @@ async def handle_message(
             active_job_id=active_job_id,
         )
 
-        # ====================================================
-        # SEND RESPONSE
-        # ====================================================
-
         await update.message.reply_text(
             response_text
         )
-
-        # ====================================================
-        # SAVE ASSISTANT RESPONSE
-        # ====================================================
 
         save_message(
             user_id=user_id,
@@ -545,6 +499,278 @@ async def handle_message(
                 "user_id=%s",
                 user_id,
             )
+
+
+# ============================================================
+# PDF RESUME HANDLER
+# ============================================================
+
+async def handle_resume_document(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    if not update.effective_user:
+
+        logger.warning(
+            "RESUME | Document without user"
+        )
+
+        return
+
+    user_id = update.effective_user.id
+
+    logger.info(
+        "BOT | Document received | user_id=%s",
+        user_id,
+    )
+
+    if not check_authorization(update):
+        return
+
+    if not update.message or not update.message.document:
+
+        logger.warning(
+            "RESUME | Missing document | "
+            "user_id=%s",
+            user_id,
+        )
+
+        return
+
+    document = update.message.document
+
+    filename = (
+        document.file_name
+        or "resume.pdf"
+    )
+
+    logger.info(
+        "RESUME | Document metadata received | "
+        "user_id=%s | filename=%s | size=%s",
+        user_id,
+        filename,
+        document.file_size,
+    )
+
+    if not filename.lower().endswith(
+        ".pdf"
+    ):
+
+        await update.message.reply_text(
+            "❌ Please send your resume as a PDF file."
+        )
+
+        logger.warning(
+            "RESUME | Unsupported document type | "
+            "user_id=%s",
+            user_id,
+        )
+
+        return
+
+    temporary_path = None
+
+    try:
+
+        await update.message.reply_text(
+            "📄 I received your resume. "
+            "I'm reading it now..."
+        )
+
+        # ====================================================
+        # DOWNLOAD
+        # ====================================================
+
+        logger.info(
+            "RESUME | Requesting Telegram file | "
+            "user_id=%s",
+            user_id,
+        )
+
+        telegram_file = await context.bot.get_file(
+            document.file_id
+        )
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".pdf",
+            delete=False,
+        ) as temporary_file:
+
+            temporary_path = (
+                temporary_file.name
+            )
+
+        logger.info(
+            "RESUME | Downloading PDF temporarily | "
+            "user_id=%s",
+            user_id,
+        )
+
+        await telegram_file.download_to_drive(
+            custom_path=temporary_path
+        )
+
+        logger.info(
+            "RESUME | PDF downloaded | "
+            "user_id=%s",
+            user_id,
+        )
+
+        # ====================================================
+        # EXTRACT TEXT
+        # ====================================================
+
+        resume_text = extract_resume_text(
+            temporary_path
+        )
+
+        logger.info(
+            "RESUME | Text extraction completed | "
+            "user_id=%s | characters=%s",
+            user_id,
+            len(resume_text),
+        )
+
+        # ====================================================
+        # GEMINI
+        # ====================================================
+
+        logger.info(
+            "RESUME | Sending extracted resume "
+            "to Gemini | user_id=%s",
+            user_id,
+        )
+
+        resume_profile = extract_resume_profile(
+            resume_text
+        )
+
+        logger.info(
+            "RESUME | Gemini profile extraction completed | "
+            "user_id=%s",
+            user_id,
+        )
+
+        # ====================================================
+        # MONGODB
+        # ====================================================
+
+        save_resume_profile(
+            user_id=user_id,
+            resume_profile=resume_profile,
+            filename=filename,
+        )
+
+        # ====================================================
+        # CONVERSATION
+        # ====================================================
+
+        save_message(
+            user_id=user_id,
+            role="user",
+            message=(
+                f"[Resume uploaded: {filename}]"
+            ),
+        )
+
+        # ====================================================
+        # RESPONSE
+        # ====================================================
+
+        skills_count = len(
+            resume_profile.skills
+        )
+
+        experience_count = len(
+            resume_profile.experience
+        )
+
+        education_count = len(
+            resume_profile.education
+        )
+
+        response_text = (
+            "✅ I've reviewed your resume.\n\n"
+            f"📌 Skills found: {skills_count}\n"
+            f"💼 Experience entries: {experience_count}\n"
+            f"🎓 Education entries: {education_count}\n\n"
+            "I've added the extracted information to "
+            "your career profile.\n\n"
+            "You can now tell me additional information, "
+            "correct anything I extracted, or tell me "
+            "what type of job you're targeting."
+        )
+
+        await update.message.reply_text(
+            response_text
+        )
+
+        save_message(
+            user_id=user_id,
+            role="assistant",
+            message=response_text,
+        )
+
+        update_agent_state(
+            user_id=user_id,
+            workflow="career_agent",
+            current_question=None,
+            current_task=None,
+            active_job_id=None,
+        )
+
+        logger.info(
+            "RESUME | Resume processing completed | "
+            "user_id=%s",
+            user_id,
+        )
+
+    except Exception:
+
+        logger.exception(
+            "RESUME | Failed to process resume | "
+            "user_id=%s",
+            user_id,
+        )
+
+        await update.message.reply_text(
+            "❌ I couldn't process that resume.\n\n"
+            "Please make sure it is a readable PDF "
+            "and try again."
+        )
+
+    finally:
+
+        # ====================================================
+        # DELETE TEMPORARY FILE
+        # ====================================================
+
+        if temporary_path:
+
+            try:
+
+                if os.path.exists(
+                    temporary_path
+                ):
+
+                    os.remove(
+                        temporary_path
+                    )
+
+                    logger.info(
+                        "RESUME | Temporary PDF deleted | "
+                        "user_id=%s",
+                        user_id,
+                    )
+
+            except Exception:
+
+                logger.exception(
+                    "RESUME | Failed to delete temporary PDF | "
+                    "user_id=%s",
+                    user_id,
+                )
 
 
 # ============================================================
@@ -647,7 +873,7 @@ def main():
     )
 
     # ========================================================
-    # HANDLERS
+    # COMMANDS
     # ========================================================
 
     application.add_handler(
@@ -657,12 +883,31 @@ def main():
         )
     )
 
+    # ========================================================
+    # PDF DOCUMENT
+    # ========================================================
+
+    application.add_handler(
+        MessageHandler(
+            filters.Document.PDF,
+            handle_resume_document,
+        )
+    )
+
+    # ========================================================
+    # TEXT
+    # ========================================================
+
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handle_message,
         )
     )
+
+    # ========================================================
+    # ERROR HANDLER
+    # ========================================================
 
     application.add_error_handler(
         error_handler
