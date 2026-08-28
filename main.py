@@ -3,7 +3,6 @@ import os
 import tempfile
 from threading import Thread
 
-from flask import Flask
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -20,10 +19,6 @@ from config import (
 from database import (
     check_database_connection,
     create_indexes,
-    create_user,
-    get_recent_messages,
-    get_user,
-    save_message,
     save_resume_profile,
     update_agent_state,
     update_profile,
@@ -36,6 +31,17 @@ from agent import (
 
 from resume_parser import (
     extract_resume_text,
+)
+
+from app.web import (
+    run_web,
+)
+
+from app.services import (
+    ensure_user,
+    get_recent_conversation,
+    save_assistant_message,
+    save_user_message,
 )
 
 
@@ -71,88 +77,6 @@ logging.getLogger(
 logging.getLogger(
     "werkzeug"
 ).setLevel(logging.WARNING)
-
-
-# ============================================================
-# FLASK HEALTH SERVER
-# ============================================================
-
-app = Flask(__name__)
-
-
-@app.route("/")
-def home():
-
-    logger.info(
-        "HEALTH | Health check received"
-    )
-
-    return "AI Job Agent is alive!"
-
-
-def run_web():
-
-    port = int(
-        os.environ.get(
-            "PORT",
-            10000,
-        )
-    )
-
-    logger.info(
-        "WEB | Starting health server | port=%s",
-        port,
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=False,
-        use_reloader=False,
-    )
-
-
-# ============================================================
-# USER SESSION
-# ============================================================
-
-def ensure_user(
-    user_id,
-):
-
-    logger.info(
-        "USER | Checking user session | "
-        "user_id=%s",
-        user_id,
-    )
-
-    user = get_user(
-        user_id
-    )
-
-    if not user:
-
-        logger.info(
-            "USER | New user detected; creating profile | "
-            "user_id=%s",
-            user_id,
-        )
-
-        create_user(
-            user_id
-        )
-
-        user = get_user(
-            user_id
-        )
-
-    logger.info(
-        "USER | User session ready | "
-        "user_id=%s",
-        user_id,
-    )
-
-    return user
 
 
 # ============================================================
@@ -394,7 +318,7 @@ async def handle_message(
             "active_job_id"
         )
 
-        recent_messages = get_recent_messages(
+        recent_messages = get_recent_conversation(
             user_id=user_id,
             limit=20,
         )
@@ -419,9 +343,8 @@ async def handle_message(
             recent_messages=recent_messages,
         )
 
-        save_message(
+        save_user_message(
             user_id=user_id,
-            role="user",
             message=user_message,
         )
 
@@ -464,9 +387,8 @@ async def handle_message(
             response_text
         )
 
-        save_message(
+        save_assistant_message(
             user_id=user_id,
-            role="assistant",
             message=response_text,
         )
 
@@ -667,12 +589,9 @@ async def handle_resume_document(
         # CONVERSATION
         # ====================================================
 
-        save_message(
+        save_user_message(
             user_id=user_id,
-            role="user",
-            message=(
-                f"[Resume uploaded: {filename}]"
-            ),
+            message=f"[Resume uploaded: {filename}]",
         )
 
         # ====================================================
@@ -707,9 +626,8 @@ async def handle_resume_document(
             response_text
         )
 
-        save_message(
+        save_assistant_message(
             user_id=user_id,
-            role="assistant",
             message=response_text,
         )
 
@@ -838,13 +756,13 @@ def main():
     )
 
     # ========================================================
-    # FLASK
+    # WEB
     # ========================================================
 
     web_thread = Thread(
         target=run_web,
         daemon=True,
-        name="flask-health-server",
+        name="health-server",
     )
 
     web_thread.start()
